@@ -1,0 +1,6 @@
+## Interface: 16001
+## Title: Buff Tracker
+## Notes: Tracks how many unique people you have buffed.
+## SavedVariables: BuffTrackerDB
+
+Core.lua
