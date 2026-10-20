@@ -1,0 +1,23 @@
+# Local Claude Code settings
+.claude/
+*.local.json
+
+# Secrets and environment files
+.env
+.env.*
+*.pem
+*.key
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Logs and build leftovers
+*.log
+*.bak
+*.orig
+*.zip
