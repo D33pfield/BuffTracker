@@ -66,6 +66,8 @@ end
 local function GetMilestoneChannel()
     if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
         return "INSTANCE_CHAT"
+    elseif IsInRaid() then
+        return "RAID"
     elseif IsInGroup(LE_PARTY_CATEGORY_HOME) then
         return "PARTY"
     end
@@ -150,6 +152,9 @@ local MILESTONES = {
 
 local MAX_ERRORS = 20
 
+-- custom sound, dropped into the addon folder next to Core.lua
+local MILESTONE_SOUND = "Interface\\AddOns\\BuffTracker\\milestone.ogg"
+
 local function GetNextMilestone(current)
     local next = nil
     for m in pairs(MILESTONES) do
@@ -194,6 +199,45 @@ local function RebuildUnique()
     end
 end
 
+-- Options page under Settings > AddOns. Values live in DB, so the page and
+-- the slash commands read and write the same data.
+local settingsCategory, announceSetting, soundSetting
+
+local function RegisterSettings()
+    settingsCategory = Settings.RegisterVerticalLayoutCategory(ADDON)
+    announceSetting = Settings.RegisterAddOnSetting(
+        settingsCategory, "BUFFTRACKER_ANNOUNCE", "announce", DB,
+        Settings.VarType.Boolean, "Announce milestones to group chat", true
+    )
+    Settings.CreateCheckbox(settingsCategory, announceSetting,
+        "Post milestones to instance, raid or party chat, whichever you're in. Solo milestones are only printed locally.")
+
+    soundSetting = Settings.RegisterAddOnSetting(
+        settingsCategory, "BUFFTRACKER_SOUND", "sound", DB,
+        Settings.VarType.Boolean, "Play sound on milestone", true
+    )
+    Settings.CreateCheckbox(settingsCategory, soundSetting, "Play a sound when you reach a milestone.")
+
+    -- one checkbox per buff seen so far; buffs first seen later show up after a reload
+    local names = {}
+    for name in pairs(DB.buffs) do names[name] = true end
+    for name in pairs(DB.ignore) do names[name] = true end
+    local sorted = {}
+    for name in pairs(names) do
+        if not DEFAULT_IGNORE[name] then table.insert(sorted, name) end
+    end
+    table.sort(sorted)
+    for _, name in ipairs(sorted) do
+        local setting = Settings.RegisterAddOnSetting(
+            settingsCategory, "BUFFTRACKER_IGNORE_" .. name, name, DB.ignore,
+            Settings.VarType.Boolean, name, false
+        )
+        Settings.CreateCheckbox(settingsCategory, setting, "Leave " .. name .. " out of your count. Data is kept.")
+    end
+
+    Settings.RegisterAddOnCategory(settingsCategory)
+end
+
 local function InitDB()
     BuffTrackerDB = BuffTrackerDB or {}
     DB = BuffTrackerDB
@@ -216,9 +260,17 @@ local function InitDB()
     DB.milestones = DB.milestones or {}
     DB.ignore = DB.ignore or {}
     DB.errors = DB.errors or {}
+    -- older versions stored a mode bitmask; say was removed, so only group chat carries over
+    if DB.announceMode ~= nil then
+        DB.announce = bit.band(DB.announceMode, 1) ~= 0
+        DB.announceMode = nil
+    end
     if DB.announce == nil then DB.announce = true end
+    DB.announceSay = nil
+    if DB.sound == nil then DB.sound = true end
 
     RebuildUnique()
+    RegisterSettings()
 end
 
 ---------------------------------------------------------------------------
@@ -256,15 +308,23 @@ end
 local function FlushAnnounce()
     if not pendingAnnounce or InCombatLockdown() or ChatLocked() then return end
     local channel = GetMilestoneChannel()
-    if channel then
+    if DB.announce and channel then
         pcall(SendChat, pendingAnnounce, channel)
     end
     pendingAnnounce = nil
 end
 
+-- the count can jump past a milestone (un-ignoring a buff), so every milestone
+-- at or below the count gets marked earned, but only the highest one is announced
 local function CheckMilestone()
-    if not MILESTONES[totalUnique] or DB.milestones[totalUnique] then return end
-    DB.milestones[totalUnique] = true
+    local milestone
+    for m in pairs(MILESTONES) do
+        if m <= totalUnique and not DB.milestones[m] then
+            DB.milestones[m] = true
+            if not milestone or m > milestone then milestone = m end
+        end
+    end
+    if not milestone then return end
 
     local starIcon = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_1:14|t"
     Print(starIcon .. " |cFFFFFF00MILESTONE REACHED!|r " .. starIcon)
@@ -272,14 +332,14 @@ local function CheckMilestone()
 
     alertFrame:AddMessage("⭐ " .. ADDON .. ": " .. totalUnique .. " players buffed! ⭐", 1.0, 0.84, 0.0)
 
-    if PlaySound then
-        local soundID = SOUNDKIT and SOUNDKIT.LEVEL_UP or 841
-        PlaySound(soundID)
+    -- falls back to the level-up sound if the custom file isn't in the addon folder
+    if DB.sound and not (PlaySoundFile and PlaySoundFile(MILESTONE_SOUND, "Master")) and PlaySound then
+        PlaySound(SOUNDKIT and SOUNDKIT.LEVEL_UP or 841)
     end
 
     -- chat waits until combat ends (and chat lockdown lifts) so it can't fail mid-pull
     if DB.announce then
-        pendingAnnounce = string.format("%s: MILESTONE! Just hit %d unique players buffed!", ADDON, totalUnique)
+        pendingAnnounce = string.format("%s: MILESTONE! Just hit %d unique players buffed!", ADDON, milestone)
         FlushAnnounce()
     end
 end
@@ -318,7 +378,8 @@ end
 
 local function GetPlayerKey(unit)
     local name, realm = scrub(UnitName(unit))
-    if not name then return end
+    -- a unit that is still loading can report as "Unknown"
+    if not name or name == UNKNOWNOBJECT then return end
     -- include realm so cross-realm players with the same name aren't merged
     if realm and realm ~= "" then
         return name .. "-" .. realm
@@ -352,8 +413,9 @@ local function ScanUnit(unit, updateInfo)
 
     for i = 1, 40 do
         local a = BuffAt(unit, i)
-        if not a then break end
-        Record(playerKey, a)
+        -- nil is the end of the list; false is an unreadable aura, so skip it
+        if a == nil then break end
+        if a then Record(playerKey, a) end
     end
 end
 
@@ -371,7 +433,10 @@ local f = CreateFrame("Frame", "BuffTrackerEventFrame")
 f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("UNIT_AURA")
 f:RegisterEvent("PLAYER_REGEN_ENABLED")
-f:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED")
+-- registering an event this client doesn't know would stop the whole file loading
+if C_EventUtils and C_EventUtils.IsEventValid and C_EventUtils.IsEventValid("ADDON_RESTRICTION_STATE_CHANGED") then
+    f:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED")
+end
 
 f:SetScript("OnEvent", function(self, event, unit, updateInfo)
     if event == "PLAYER_LOGIN" then
@@ -450,6 +515,7 @@ SlashCmdList.BUFFTRACKER = function(msg)
         wipe(DB.buffs)
         wipe(DB.icons)
         wipe(DB.milestones)
+        pendingAnnounce = nil
         RebuildUnique()
         Print("Data and milestones have been reset.")
         return
@@ -466,15 +532,28 @@ SlashCmdList.BUFFTRACKER = function(msg)
     end
 
     if cmd == "announce" then
-        DB.announce = not DB.announce
+        announceSetting:SetValue(not DB.announce)
         Print("milestone announcements to group chat " .. (DB.announce and "|cFF00FF00on|r" or "|cFFFF5555off|r") .. ".")
+        return
+    end
+
+    if cmd == "sound" then
+        soundSetting:SetValue(not DB.sound)
+        Print("milestone sound " .. (DB.sound and "|cFF00FF00on|r" or "|cFFFF5555off|r") .. ".")
+        return
+    end
+
+    if cmd == "config" then
+        Settings.OpenToCategory(settingsCategory:GetID())
         return
     end
 
     if cmd == "ignore" then
         if rest == "" then
             local list = {}
-            for name in pairs(DB.ignore) do table.insert(list, name) end
+            for name, on in pairs(DB.ignore) do
+                if on then table.insert(list, name) end
+            end
             table.sort(list)
             Print("ignored: " .. (#list > 0 and table.concat(list, ", ") or "(none)"))
             return
@@ -488,6 +567,7 @@ SlashCmdList.BUFFTRACKER = function(msg)
             Print("ignoring |cFFFF5555" .. name .. "|r (data kept, just hidden).")
         end
         RebuildUnique()
+        CheckMilestone()
         return
     end
 
@@ -497,6 +577,8 @@ SlashCmdList.BUFFTRACKER = function(msg)
         print("  /buffs chat           - flex in party/raid/say")
         print("  /buffs ignore <buff>  - hide/unhide a buff (no name = list)")
         print("  /buffs announce       - toggle milestone group announcements")
+        print("  /buffs sound          - toggle the milestone sound")
+        print("  /buffs config         - open the options page")
         print("  /buffs errors         - show caught errors")
         print("  /buffs reset          - wipe everything")
         print("  /buffs help           - this")
@@ -537,7 +619,10 @@ SlashCmdList.BUFFTRACKER = function(msg)
             end
         end
 
-        SendChat(flexMsg, channel)
+        if not pcall(SendChat, flexMsg, channel) then
+            Print("couldn't send to " .. channel:lower() .. " chat.")
+            return
+        end
         Print("flexed in " .. channel:lower() .. " chat.")
         return
     end
