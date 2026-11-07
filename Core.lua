@@ -202,6 +202,7 @@ end
 -- Options page under Settings > AddOns. Values live in DB, so the page and
 -- the slash commands read and write the same data.
 local settingsCategory, announceSetting, soundSetting
+local CheckMilestone -- defined below; the ignore checkboxes call it
 
 local function RegisterSettings()
     settingsCategory = Settings.RegisterVerticalLayoutCategory(ADDON)
@@ -232,6 +233,11 @@ local function RegisterSettings()
             settingsCategory, "BUFFTRACKER_IGNORE_" .. name, name, DB.ignore,
             Settings.VarType.Boolean, name, false
         )
+        -- the count depends on what's ignored, so recompute when a box is toggled
+        setting:SetValueChangedCallback(function()
+            RebuildUnique()
+            CheckMilestone()
+        end)
         Settings.CreateCheckbox(settingsCategory, setting, "Leave " .. name .. " out of your count. Data is kept.")
     end
 
@@ -316,7 +322,7 @@ end
 
 -- the count can jump past a milestone (un-ignoring a buff), so every milestone
 -- at or below the count gets marked earned, but only the highest one is announced
-local function CheckMilestone()
+function CheckMilestone()
     local milestone
     for m in pairs(MILESTONES) do
         if m <= totalUnique and not DB.milestones[m] then
@@ -393,7 +399,7 @@ local function ScanUnit(unit, updateInfo)
     if SafeIsUnit(unit, "player") ~= false then return end
     if AurasHidden() then return end
 
-    -- incremental update: only removals/refreshes, nothing new to count
+    -- incremental update: only newly added auras can add to the count
     if updateInfo and canaccesstbl(updateInfo) and not scrub(updateInfo.isFullUpdate) then
         local added = updateInfo.addedAuras
         if not added or not canaccesstbl(added) then return end
