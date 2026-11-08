@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Buff Tracker
 ## Notes: Tracks how many unique players you have buffed, for any class.
-## Version: 2.1.1
+## Version: 2.1.2
 ## SavedVariables: BuffTrackerDB
 
 Core.lua

@@ -201,19 +201,23 @@ end
 
 -- Options page under Settings > AddOns. Values live in DB, so the page and
 -- the slash commands read and write the same data.
-local settingsCategory, announceSetting, soundSetting
+-- Slash commands must never call into the Settings API (SetValue,
+-- OpenToCategory): that runs Blizzard's settings code as addon code, and
+-- whatever it touches (nameplates, raid frames) stays tainted until /reload,
+-- breaking their secret value comparisons. They write DB directly instead;
+-- the page reads DB each time it opens.
 local CheckMilestone -- defined below; the ignore checkboxes call it
 
 local function RegisterSettings()
-    settingsCategory = Settings.RegisterVerticalLayoutCategory(ADDON)
-    announceSetting = Settings.RegisterAddOnSetting(
+    local settingsCategory = Settings.RegisterVerticalLayoutCategory(ADDON)
+    local announceSetting = Settings.RegisterAddOnSetting(
         settingsCategory, "BUFFTRACKER_ANNOUNCE", "announce", DB,
         Settings.VarType.Boolean, "Announce milestones to group chat", true
     )
     Settings.CreateCheckbox(settingsCategory, announceSetting,
         "Post milestones to instance, raid or party chat, whichever you're in. Solo milestones are only printed locally.")
 
-    soundSetting = Settings.RegisterAddOnSetting(
+    local soundSetting = Settings.RegisterAddOnSetting(
         settingsCategory, "BUFFTRACKER_SOUND", "sound", DB,
         Settings.VarType.Boolean, "Play sound on milestone", true
     )
@@ -538,19 +542,20 @@ SlashCmdList.BUFFTRACKER = function(msg)
     end
 
     if cmd == "announce" then
-        announceSetting:SetValue(not DB.announce)
+        DB.announce = not DB.announce
         Print("milestone announcements to group chat " .. (DB.announce and "|cFF00FF00on|r" or "|cFFFF5555off|r") .. ".")
         return
     end
 
     if cmd == "sound" then
-        soundSetting:SetValue(not DB.sound)
+        DB.sound = not DB.sound
         Print("milestone sound " .. (DB.sound and "|cFF00FF00on|r" or "|cFFFF5555off|r") .. ".")
         return
     end
 
     if cmd == "config" then
-        Settings.OpenToCategory(settingsCategory:GetID())
+        -- opening the panel from addon code taints it, so point the way instead
+        Print("options are under |cFFFFFF00Esc > Options > AddOns > " .. ADDON .. "|r.")
         return
     end
 
@@ -584,7 +589,7 @@ SlashCmdList.BUFFTRACKER = function(msg)
         print("  /buffs ignore <buff>  - hide/unhide a buff (no name = list)")
         print("  /buffs announce       - toggle milestone group announcements")
         print("  /buffs sound          - toggle the milestone sound")
-        print("  /buffs config         - open the options page")
+        print("  /buffs config         - where to find the options")
         print("  /buffs errors         - show caught errors")
         print("  /buffs reset          - wipe everything")
         print("  /buffs help           - this")

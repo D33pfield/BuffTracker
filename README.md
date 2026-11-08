@@ -11,6 +11,6 @@ Tracks how many unique players you've buffed, for any class. Every buff you cast
 | `/buffs ignore <buff>` | Hide or unhide a buff (no name lists ignored buffs) |
 | `/buffs announce` | Toggle milestone announcements to group chat. Also set in the options page. |
 | `/buffs sound` | Toggle the milestone sound |
-| `/buffs config` | Open the options page under Settings > AddOns |
+| `/buffs config` | Show where the options page is (Esc > Options > AddOns) |
 | `/buffs errors` | Show errors the addon caught (e.g. during dungeons) |
 | `/buffs reset` | Wipe all data |
