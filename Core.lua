@@ -340,7 +340,8 @@ function CheckMilestone()
     Print(starIcon .. " |cFFFFFF00MILESTONE REACHED!|r " .. starIcon)
     Print("You have buffed |cFF00FF00" .. totalUnique .. "|r unique players!")
 
-    alertFrame:AddMessage("⭐ " .. ADDON .. ": " .. totalUnique .. " players buffed! ⭐", 1.0, 0.84, 0.0)
+    local alertStar = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_1:24|t"
+    alertFrame:AddMessage(alertStar .. " " .. ADDON .. ": " .. totalUnique .. " players buffed! " .. alertStar, 1.0, 0.84, 0.0)
 
     -- falls back to the level-up sound if the custom file isn't in the addon folder
     if DB.sound and not (PlaySoundFile and PlaySoundFile(MILESTONE_SOUND, "Master")) and PlaySound then
